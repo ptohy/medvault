@@ -1,0 +1,110 @@
+# MedVault + Home Assistant
+# Cole este conteúdo como package em /config/packages/medvault.yaml
+# Depois reinicie o Home Assistant.
+#
+# No MedVault, configure:
+# Configurações > Integrações > Home Assistant
+# URL:
+# http://IP_DO_HOME_ASSISTANT:8123/api/webhook/medvault_notify
+#
+# As ações do celular serão enviadas de volta para o MedVault pelo callback_url recebido no webhook.
+
+rest_command:
+  medvault_event_action:
+    url: "{{ callback_url }}"
+    method: POST
+    content_type: "application/json"
+    payload: '{"action":"{{ action }}"}'
+
+automation:
+  - id: medvault_webhook_notify_treatment
+    alias: "MedVault - Notificar tratamento"
+    mode: queued
+    trigger:
+      - platform: webhook
+        webhook_id: medvault_notify
+        allowed_methods:
+          - POST
+        local_only: false
+    condition:
+      - condition: template
+        value_template: "{{ trigger.json.source == 'medvault' and trigger.json.type in ['treatment_event', 'treatment_followup'] }}"
+    action:
+      - variables:
+          event_id: "{{ trigger.json.event_id }}"
+          callback_url: "{{ trigger.json.callback_url }}"
+          treatment: "{{ trigger.json.treatment }}"
+          profile: "{{ trigger.json.profile }}"
+          side: "{{ trigger.json.administration_side | default('') }}"
+          scheduled_at: "{{ trigger.json.scheduled_at | default(trigger.json.scheduled_for) }}"
+          prescription_url: "{{ trigger.json.prescription_url | default('') }}"
+          title: >-
+            {% if trigger.json.type == 'treatment_followup' %}
+              MedVault: foi aplicado?
+            {% else %}
+              MedVault: {{ treatment }}
+            {% endif %}
+          message: >-
+            {{ profile }} · {{ scheduled_at }}
+            {% if side %} · {{ side }}{% endif %}
+            {% if prescription_url %} · Receita disponível no MedVault{% endif %}
+      - service: notify.mobile_app_iphone_de_paulo
+        data:
+          title: "{{ title }}"
+          message: "{{ message }}"
+          data:
+            url: "{{ prescription_url if prescription_url else '/lovelace' }}"
+            actions:
+              - action: "MEDVAULT_APPLIED_{{ event_id }}"
+                title: "Aplicado/Tomado"
+              - action: "MEDVAULT_POSTPONED_{{ event_id }}"
+                title: "Adiar"
+              - action: "MEDVAULT_MISSED_{{ event_id }}"
+                title: "Não aplicado"
+
+  - id: medvault_mobile_action_response
+    alias: "MedVault - Responder ação do celular"
+    mode: queued
+    trigger:
+      - platform: event
+        event_type: mobile_app_notification_action
+    condition:
+      - condition: template
+        value_template: "{{ trigger.event.data.action is string and trigger.event.data.action.startswith('MEDVAULT_') }}"
+    action:
+      - variables:
+          raw_action: "{{ trigger.event.data.action }}"
+          event_id: "{{ raw_action.split('_')[-1] }}"
+          medvault_action: >-
+            {% if raw_action.startswith('MEDVAULT_APPLIED_') %}
+              applied
+            {% elif raw_action.startswith('MEDVAULT_POSTPONED_') %}
+              postponed
+            {% else %}
+              missed
+            {% endif %}
+          callback_url: "http://192.168.50.201:8090/api/treatment-events/{{ event_id }}/action"
+      - service: rest_command.medvault_event_action
+        data:
+          callback_url: "{{ callback_url }}"
+          action: "{{ medvault_action }}"
+
+  - id: medvault_webhook_notify_low_stock
+    alias: "MedVault - Notificar estoque baixo"
+    mode: queued
+    trigger:
+      - platform: webhook
+        webhook_id: medvault_notify
+        allowed_methods:
+          - POST
+        local_only: false
+    condition:
+      - condition: template
+        value_template: "{{ trigger.json.source == 'medvault' and trigger.json.type == 'inventory_low_stock' }}"
+    action:
+      - service: notify.mobile_app_iphone_de_paulo
+        data:
+          title: "MedVault: estoque baixo"
+          message: "{{ trigger.json.medication }}: restam {{ trigger.json.units_on_hand }} {{ trigger.json.unit_label }}."
+          data:
+            url: "{{ trigger.json.medvault_url | default('http://192.168.50.201:8090') }}"

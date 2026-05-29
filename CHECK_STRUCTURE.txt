@@ -1,0 +1,24 @@
+CHECK DE ESTRUTURA
+
+Antes de atualizar a stack no Portainer, confira no GitHub:
+
+1. portainer-stack.yml começa com:
+   services:
+
+2. docker-compose.yml começa com:
+   services:
+
+3. backend/Dockerfile começa com:
+   FROM python:
+
+4. frontend/Dockerfile começa com:
+   FROM node:
+
+5. frontend/src/index.css começa com:
+   @tailwind
+
+6. frontend/src/main.tsx começa com:
+   import React
+
+No Portainer:
+Compose path = portainer-stack.yml

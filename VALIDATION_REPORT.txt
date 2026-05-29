@@ -1,0 +1,8 @@
+backend_py_compile: ok
+route_count_regex: 44
+required_routes: ok
+route_ast: ok
+status_decorator_placement: ok
+compose_yaml: ok
+dockerfiles: ok
+frontend_build: ok

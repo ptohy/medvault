@@ -1,0 +1,45 @@
+services:
+  medvault-backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: medvault-backend
+    restart: unless-stopped
+    ports:
+      - "8088:8088"
+    environment:
+      TZ: "America/Sao_Paulo"
+      OLLAMA_BASE_URL: "http://192.168.50.112:11434"
+      OLLAMA_MODEL: "qwen2.5:7b"
+      MAX_CONTENT_LENGTH_MB: "100"
+      OCR_MAX_PAGES: "10"
+      HA_WEBHOOK_URL: ""
+      N8N_INGEST_TOKEN: ""
+      SHARE_BASE_URL: ""
+      SELF_BASE_URL: "http://192.168.50.201:8088"
+      CALENDAR_ICS_URL: ""
+      CALENDAR_AI_SYNC_ENABLED: "false"
+      CALENDAR_AI_SYNC_MAX_EVENTS: "0"
+      CALENDAR_SYNC_KEYWORDS: "consulta,consultório,consultorio,medico,médico,endocrino,endocrinologista,urologista,telemedicina,exame,laboratório,laboratorio,dasa,amil,porto,aplicação,aplicacao,aplicaçao,injetável,injetavel,injetáveis,injetaveis,injeção,injecao,raia,drogaria,farmacia,farmácia,mounjaro,deposteron"
+    volumes:
+      - medvault_data:/data
+      - medvault_uploads:/uploads
+      - medvault_exports:/exports
+
+  medvault-frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+      args:
+        VITE_API_BASE: "auto"
+    container_name: medvault-frontend
+    restart: unless-stopped
+    depends_on:
+      - medvault-backend
+    ports:
+      - "8090:80"
+
+volumes:
+  medvault_data:
+  medvault_uploads:
+  medvault_exports:
