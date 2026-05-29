@@ -27,7 +27,7 @@ from fastapi.responses import FileResponse, Response
 from fastapi.staticfiles import StaticFiles
 
 
-APP_VERSION = "6.8.4"
+APP_VERSION = "6.8.5"
 DATA_DIR = Path(os.getenv("DATA_DIR", "/data"))
 UPLOAD_DIR = Path(os.getenv("UPLOAD_DIR", "/uploads"))
 EXPORT_DIR = Path(os.getenv("EXPORT_DIR", "/exports"))
@@ -112,6 +112,14 @@ def safe_db_text(value):
     if isinstance(value, (dict, list, tuple)):
         return json.dumps(value, ensure_ascii=False)
     return str(value)
+
+
+def safe_filename(value):
+    name = safe_db_text(value or "").strip()
+    name = Path(name).name
+    name = re.sub(r"[^A-Za-z0-9._ -]+", "_", name)
+    name = name.strip(" ._-")
+    return name or "arquivo"
 
 
 def now_iso():
@@ -3575,38 +3583,44 @@ async def ingest_n8n(
 
 @app.post("/api/inventory/purchase-preview")
 async def inventory_purchase_preview(profile_id: int = Form(0), file: UploadFile = File(...)):
-    if not profile_id:
-        raise HTTPException(400, "Perfil obrigatório.")
+    try:
+        if not profile_id:
+            raise HTTPException(400, "Perfil obrigatório.")
 
-    original_name = safe_filename(file.filename or "compra")
-    suffix = Path(original_name).suffix.lower()
-    if suffix not in {".pdf", ".png", ".jpg", ".jpeg", ".webp", ".bmp", ".tif", ".tiff"}:
-        raise HTTPException(400, "Envie PDF ou imagem da nota/pedido.")
+        original_name = safe_filename(file.filename or "compra")
+        suffix = Path(original_name).suffix.lower()
+        if suffix not in {".pdf", ".png", ".jpg", ".jpeg", ".webp", ".bmp", ".tif", ".tiff"}:
+            raise HTTPException(400, "Envie PDF ou imagem da nota/pedido.")
 
-    UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
-    stored_name = f"purchase_{uuid.uuid4().hex}{suffix or '.bin'}"
-    path = UPLOAD_DIR / stored_name
-    content = await file.read()
-    if len(content) > MAX_CONTENT_LENGTH_MB * 1024 * 1024:
-        raise HTTPException(413, "Arquivo muito grande.")
-    path.write_bytes(content)
+        UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
+        stored_name = f"purchase_{uuid.uuid4().hex}{suffix or '.bin'}"
+        path = UPLOAD_DIR / stored_name
+        content = await file.read()
+        if len(content) > MAX_CONTENT_LENGTH_MB * 1024 * 1024:
+            raise HTTPException(413, "Arquivo muito grande.")
+        path.write_bytes(content)
 
-    with db() as conn:
-        require_profile(conn, profile_id)
+        with db() as conn:
+            require_profile(conn, profile_id)
 
-    text = extract_text_from_purchase_file(path)
-    extracted = analyze_purchase_with_ollama(text)
+        text = extract_text_from_purchase_file(path)
+        extracted = analyze_purchase_with_ollama(text)
 
-    return {
-        "profile_id": profile_id,
-        "file_name": stored_name,
-        "original_name": original_name,
-        "vendor": extracted.get("vendor", ""),
-        "purchase_date": extracted.get("purchase_date") or today_date(),
-        "items": extracted.get("items", []),
-        "raw_text": extracted.get("raw_text", "")[:5000],
-        "source": extracted.get("source", "unknown"),
-    }
+        return {
+            "profile_id": profile_id,
+            "file_name": stored_name,
+            "original_name": original_name,
+            "vendor": extracted.get("vendor", ""),
+            "purchase_date": extracted.get("purchase_date") or today_date(),
+            "items": extracted.get("items", []),
+            "raw_text": extracted.get("raw_text", "")[:5000],
+            "source": extracted.get("source", "unknown"),
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        log_event("error", "inventory", "Falha ao pré-processar nota/print.", str(e))
+        raise HTTPException(500, f"Falha ao ler nota/print: {e}")
 
 
 @app.post("/api/inventory/purchase-confirm")

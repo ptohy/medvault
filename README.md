@@ -473,3 +473,10 @@ Implementado:
 - Tela de revisão antes de salvar.
 - Confirmação cria novo item de estoque ou soma ao item existente.
 - Histórico de compra e movimentação de estoque são registrados automaticamente.
+
+
+## V6.8.5 Purchase import fix
+
+Correção:
+- Corrige erro 500 ao importar nota/print causado por `safe_filename` ausente.
+- Endpoint `/api/inventory/purchase-preview` agora retorna mensagem útil em caso de falha.
