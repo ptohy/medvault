@@ -2194,3 +2194,106 @@ pre {
   }
 }
 
+
+
+/* V6.8.8 Stock edit/manual usage */
+.inventory-card-actions--edit {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.inventory-card-actions--edit .MuiButton-root,
+.inventory-card-actions--edit button {
+  min-width: 0;
+}
+
+.inventory-edit-modal {
+  display: grid;
+  gap: 1rem;
+}
+
+.inventory-edit-modal__hero {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 1rem;
+  padding: 1rem;
+  border-radius: 24px;
+  border: 1px solid rgba(255,255,255,.08);
+  background: linear-gradient(135deg, rgba(34,211,238,.10), rgba(255,255,255,.035));
+}
+
+.inventory-edit-modal__hero h3 {
+  margin: 0;
+  color: #f8fafc;
+  font-size: 1.1rem;
+  font-weight: 850;
+  letter-spacing: -.02em;
+}
+
+.inventory-edit-modal__hero p {
+  margin: .35rem 0 0;
+  color: #a1a1aa;
+  line-height: 1.45;
+}
+
+.inventory-edit-grid {
+  display: grid;
+  grid-template-columns: minmax(220px, 1.25fr) repeat(2, minmax(130px, .55fr));
+  gap: .8rem;
+  padding: 1rem;
+  border-radius: 24px;
+  border: 1px solid rgba(255,255,255,.08);
+  background: rgba(255,255,255,.035);
+}
+
+.inventory-edit-grid .field-shell--wide {
+  grid-column: span 2;
+}
+
+.inventory-edit-check {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: .55rem;
+  min-height: 52px;
+  padding: 0 .9rem;
+  border-radius: 18px;
+  border: 1px solid rgba(255,255,255,.10);
+  background: rgba(255,255,255,.035);
+  color: #d4d4d8;
+  font-weight: 800;
+}
+
+.inventory-edit-check input {
+  width: 18px;
+  height: 18px;
+  min-height: 18px;
+  accent-color: #22d3ee;
+}
+
+.inventory-edit-modal__footer {
+  display: flex;
+  justify-content: flex-end;
+  gap: .75rem;
+}
+
+@media (max-width: 860px) {
+  .inventory-edit-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .inventory-edit-grid .field-shell--wide {
+    grid-column: auto;
+  }
+
+  .inventory-edit-modal__hero,
+  .inventory-edit-modal__footer {
+    flex-direction: column;
+  }
+
+  .inventory-edit-modal__footer .MuiButton-root,
+  .inventory-edit-modal__footer button {
+    width: 100%;
+  }
+}
+

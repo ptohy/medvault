@@ -27,7 +27,7 @@ from fastapi.responses import FileResponse, Response
 from fastapi.staticfiles import StaticFiles
 
 
-APP_VERSION = "6.8.7"
+APP_VERSION = "6.8.8"
 DATA_DIR = Path(os.getenv("DATA_DIR", "/data"))
 UPLOAD_DIR = Path(os.getenv("UPLOAD_DIR", "/uploads"))
 EXPORT_DIR = Path(os.getenv("EXPORT_DIR", "/exports"))
@@ -3899,29 +3899,103 @@ def update_inventory_item(inventory_id: int, payload: dict):
         item = conn.execute("SELECT * FROM medication_inventory WHERE id=?", (inventory_id,)).fetchone()
         if not item:
             raise HTTPException(404, "Item não encontrado.")
+
+        old_units = float(item["units_on_hand"] or 0)
+        new_units = safe_float(payload.get("units_on_hand"), old_units)
+        if new_units < 0:
+            new_units = 0
+
+        dose_quantity = safe_float(payload.get("dose_quantity"), float(item["dose_quantity"] or 1) if "dose_quantity" in item.keys() else 1)
+        if dose_quantity <= 0:
+            dose_quantity = 1
+
+        prescription_id = safe_int(payload.get("prescription_id"), int(item["prescription_id"] or 0) if "prescription_id" in item.keys() else 0)
+
         conn.execute(
             """
             UPDATE medication_inventory
-            SET medication_name=?, unit_label=?, low_stock_threshold=?, requires_prescription=?, default_frequency=?, interval_days=?, notes=?, active=?, updated_at=?
+            SET medication_name=?, unit_label=?, units_on_hand=?, low_stock_threshold=?, dose_quantity=?,
+                requires_prescription=?, prescription_id=?, default_frequency=?, interval_days=?,
+                routine_preset=?, preferred_time=?, notes=?, active=?, last_low_stock_notified_at='', updated_at=?
             WHERE id=?
             """,
             (
                 safe_db_text(payload.get("medication_name") or item["medication_name"]),
                 safe_db_text(payload.get("unit_label") or item["unit_label"]),
-                float(payload.get("low_stock_threshold") if payload.get("low_stock_threshold") not in (None, "") else item["low_stock_threshold"]),
+                new_units,
+                safe_float(payload.get("low_stock_threshold"), float(item["low_stock_threshold"] or 1)),
+                dose_quantity,
                 int(bool(payload.get("requires_prescription"))) if "requires_prescription" in payload else int(item["requires_prescription"] or 0),
+                prescription_id,
                 safe_db_text(payload.get("default_frequency") if payload.get("default_frequency") is not None else item["default_frequency"]),
                 safe_int(payload.get("interval_days"), int(item["interval_days"] or 0)),
+                safe_db_text(payload.get("routine_preset") if payload.get("routine_preset") is not None else (item["routine_preset"] if "routine_preset" in item.keys() else "")),
+                safe_db_text(payload.get("preferred_time") if payload.get("preferred_time") is not None else (item["preferred_time"] if "preferred_time" in item.keys() else "")),
                 safe_db_text(payload.get("notes") if payload.get("notes") is not None else item["notes"]),
                 int(payload.get("active", item["active"])),
                 now_iso(),
                 inventory_id,
             ),
         )
+
+        if abs(new_units - old_units) > 0.0001:
+            conn.execute(
+                """
+                INSERT INTO inventory_movements(inventory_id, profile_id, movement_type, quantity, units_after, notes, created_at)
+                VALUES (?, ?, 'adjustment', ?, ?, ?, ?)
+                """,
+                (
+                    inventory_id,
+                    item["profile_id"],
+                    new_units - old_units,
+                    new_units,
+                    safe_db_text(payload.get("adjustment_notes") or "Ajuste manual de estoque"),
+                    now_iso(),
+                ),
+            )
+
+        updated = conn.execute("SELECT * FROM medication_inventory WHERE id=?", (inventory_id,)).fetchone()
+        if payload.get("create_reminder") or updated["default_frequency"] or updated["interval_days"]:
+            ensure_inventory_treatment(conn, updated)
+        return row(updated)
+
+
+@app.post("/api/inventory/{inventory_id}/consume")
+def consume_inventory_item(inventory_id: int, payload: dict):
+    quantity = safe_float(payload.get("quantity"), 0)
+    with db() as conn:
         item = conn.execute("SELECT * FROM medication_inventory WHERE id=?", (inventory_id,)).fetchone()
-        if payload.get("create_reminder") or item["default_frequency"] or item["interval_days"]:
-            ensure_inventory_treatment(conn, item)
+        if not item:
+            raise HTTPException(404, "Item não encontrado.")
+
+        if quantity <= 0:
+            quantity = safe_float(item["dose_quantity"] if "dose_quantity" in item.keys() else 1, 1)
+        if quantity <= 0:
+            quantity = 1
+
+        current = float(item["units_on_hand"] or 0)
+        new_total = max(current - quantity, 0)
+
+        conn.execute(
+            "UPDATE medication_inventory SET units_on_hand=?, last_low_stock_notified_at='', updated_at=? WHERE id=?",
+            (new_total, now_iso(), inventory_id),
+        )
+        conn.execute(
+            """
+            INSERT INTO inventory_movements(inventory_id, profile_id, movement_type, quantity, units_after, notes, created_at)
+            VALUES (?, ?, 'consume', ?, ?, ?, ?)
+            """,
+            (
+                inventory_id,
+                item["profile_id"],
+                -abs(quantity),
+                new_total,
+                safe_db_text(payload.get("notes") or "Uso/baixa manual de estoque"),
+                now_iso(),
+            ),
+        )
         return row(conn.execute("SELECT * FROM medication_inventory WHERE id=?", (inventory_id,)).fetchone())
+
 
 
 @app.delete("/api/inventory/{inventory_id}")

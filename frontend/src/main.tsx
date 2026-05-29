@@ -308,6 +308,7 @@ function App() {
   const [purchaseImportOpen, setPurchaseImportOpen] = useState(false);
   const [purchaseReview, setPurchaseReview] = useState<any>(null);
   const [purchaseProcessing, setPurchaseProcessing] = useState(false);
+  const [inventoryEdit, setInventoryEdit] = useState<any>(null);
 
   async function load() {
     try {
@@ -602,6 +603,32 @@ function App() {
     await api('/api/inventory', { method:'POST', body: JSON.stringify(payload) });
     form.reset();
     load();
+  }
+
+  async function saveInventoryItem(item:any, form:any) {
+    const payload:any = Object.fromEntries(new FormData(form));
+    payload.requires_prescription = payload.requires_prescription === 'on';
+    payload.create_reminder = payload.create_reminder === 'on';
+    await api(`/api/inventory/${item.id}`, {
+      method:'PUT',
+      body: JSON.stringify(payload)
+    });
+    setInventoryEdit(null);
+    await load();
+  }
+
+  async function consumeInventoryItem(item:any) {
+    const defaultQty = String(item.dose_quantity || 1);
+    const quantity = prompt(`Quantidade usada/baixada de ${item.medication_name}:`, defaultQty);
+    if (!quantity) return;
+    await api(`/api/inventory/${item.id}/consume`, {
+      method:'POST',
+      body: JSON.stringify({
+        quantity,
+        notes: 'Baixa manual informada pelo usuário'
+      })
+    });
+    await load();
   }
 
   async function addInventoryPurchase(item:any) {
@@ -1171,7 +1198,9 @@ function App() {
                 </div>)}
               </div>}
 
-              <div className="inventory-card-actions">
+              <div className="inventory-card-actions inventory-card-actions--edit">
+                <Button onClick={() => consumeInventoryItem(item)}>Registrar uso</Button>
+                <Secondary onClick={() => setInventoryEdit(item)}>Editar</Secondary>
                 <Button onClick={() => addInventoryPurchase(item)}>Repor</Button>
                 <Danger onClick={() => deleteInventoryItem(item)}>Excluir</Danger>
               </div>
@@ -1292,6 +1321,12 @@ function App() {
       updatePurchaseReviewItem={updatePurchaseReviewItem}
       confirmInventoryPurchaseImport={confirmInventoryPurchaseImport}
     />}
+    {inventoryEdit && <InventoryEditModal
+      item={inventoryEdit}
+      prescriptions={prescriptions}
+      onClose={() => setInventoryEdit(null)}
+      onSave={saveInventoryItem}
+    />}
     {examAction && <ExamActionModal
       action={examAction}
       onClose={() => setExamAction(null)}
@@ -1302,6 +1337,90 @@ function App() {
     />}
     {viewer && <Modal title={viewer.title} onClose={() => setViewer(null)} wide><iframe className="pdf-frame" src={`${API_BASE}/uploads/${viewer.file}`} /></Modal>}
   </main>;
+}
+
+
+
+function InventoryEditModal({ item, prescriptions, onClose, onSave }: any) {
+  return <Modal title="Editar estoque" onClose={onClose} wide>
+    <form className="inventory-edit-modal" onSubmit={(e) => { e.preventDefault(); onSave(item, e.currentTarget); }}>
+      <div className="inventory-edit-modal__hero">
+        <div>
+          <h3>{item.medication_name}</h3>
+          <p>Corrija quantidade, unidade, baixa por uso, alerta mínimo e vínculo com receita.</p>
+        </div>
+        <Badge tone="cyan">estoque atual: {Number(item.units_on_hand || 0)} {item.unit_label}</Badge>
+      </div>
+
+      <div className="inventory-edit-grid">
+        <label className="field-shell field-shell--wide">
+          <span>Medicamento</span>
+          <input name="medication_name" defaultValue={item.medication_name || ''} required />
+        </label>
+
+        <label className="field-shell">
+          <span>Estoque atual</span>
+          <input name="units_on_hand" type="number" step="0.01" defaultValue={item.units_on_hand ?? 0} />
+        </label>
+
+        <label className="field-shell">
+          <span>Unidade</span>
+          <select name="unit_label" defaultValue={item.unit_label || 'unidade'}>
+            <option value="unidade">unidade</option>
+            <option value="comprimido">comprimido</option>
+            <option value="cápsula">cápsula</option>
+            <option value="ampola">ampola</option>
+            <option value="caneta">caneta</option>
+            <option value="frasco">frasco</option>
+            <option value="cartela">cartela</option>
+            <option value="caixa">caixa</option>
+            <option value="sachê">sachê</option>
+            <option value="gota">gota</option>
+            <option value="ml">ml</option>
+            <option value="dose">dose</option>
+          </select>
+        </label>
+
+        <label className="field-shell">
+          <span>Baixar por uso</span>
+          <input name="dose_quantity" type="number" step="0.01" defaultValue={item.dose_quantity || 1} />
+        </label>
+
+        <label className="field-shell">
+          <span>Avisar quando restar</span>
+          <input name="low_stock_threshold" type="number" step="0.01" defaultValue={item.low_stock_threshold || 1} />
+        </label>
+
+        <label className="field-shell field-shell--wide">
+          <span>Receita vinculada</span>
+          <select name="prescription_id" defaultValue={item.prescription_id || ''}>
+            <option value="">Não vincular</option>
+            {prescriptions.map((r:any) => <option key={r.id} value={r.id}>{r.profile_name} · {r.title} · {r.issue_date || 'sem data'}</option>)}
+          </select>
+        </label>
+
+        <label className="inventory-edit-check">
+          <input type="checkbox" name="requires_prescription" defaultChecked={!!item.requires_prescription} />
+          <span>Exige receita?</span>
+        </label>
+
+        <label className="field-shell field-shell--wide">
+          <span>Observações</span>
+          <textarea name="notes" defaultValue={item.notes || ''} placeholder="Ex.: uma ampola já usada, comprar antes de acabar..." />
+        </label>
+
+        <input type="hidden" name="default_frequency" defaultValue={item.default_frequency || ''} />
+        <input type="hidden" name="interval_days" defaultValue={item.interval_days || 0} />
+        <input type="hidden" name="routine_preset" defaultValue={item.routine_preset || ''} />
+        <input type="hidden" name="preferred_time" defaultValue={item.preferred_time || ''} />
+      </div>
+
+      <div className="inventory-edit-modal__footer">
+        <Secondary type="button" onClick={onClose}>Cancelar</Secondary>
+        <Button type="submit">Salvar alterações</Button>
+      </div>
+    </form>
+  </Modal>;
 }
 
 

@@ -501,3 +501,13 @@ Correção:
   - 3 ampolas 2un = 6 ampolas
   - 30 comprimidos 2un = 60 comprimidos
   - 1 caneta 4un = 4 canetas
+
+
+## V6.8.8 Stock edit/manual usage
+
+Correções:
+- Adicionado botão “Editar” nos itens de estoque.
+- Adicionado botão “Registrar uso” para dar baixa manual no estoque.
+- Permite corrigir estoque atual, unidade, baixa por uso, alerta mínimo, receita vinculada e observações.
+- Backend adiciona `/api/inventory/{id}/consume`.
+- `PUT /api/inventory/{id}` agora atualiza quantidade atual e registra movimentação de ajuste.
