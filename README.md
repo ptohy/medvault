@@ -480,3 +480,24 @@ Implementado:
 Correção:
 - Corrige erro 500 ao importar nota/print causado por `safe_filename` ausente.
 - Endpoint `/api/inventory/purchase-preview` agora retorna mensagem útil em caso de falha.
+
+
+## V6.8.6 Purchase quantity fix
+
+Correção:
+- Corrige interpretação de pedidos como “Deposteron ... 3 Ampolas 2ml ... 2un”.
+- Agora o estoque correto vira 6 ampolas, não 3 ml.
+- “2ml” passa a ser tratado como volume/concentração, não unidade de estoque.
+- Preço unitário passa a ser calculado sobre a unidade real de estoque.
+
+
+## V6.8.7 Generic purchase normalizer
+
+Correção:
+- Normalizador genérico para nota fiscal/pedido/print.
+- Diferencia quantidade comprada, unidades por embalagem e concentração.
+- Evita transformar ml/mg em unidade de estoque.
+- Exemplos:
+  - 3 ampolas 2un = 6 ampolas
+  - 30 comprimidos 2un = 60 comprimidos
+  - 1 caneta 4un = 4 canetas

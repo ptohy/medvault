@@ -27,7 +27,7 @@ from fastapi.responses import FileResponse, Response
 from fastapi.staticfiles import StaticFiles
 
 
-APP_VERSION = "6.8.5"
+APP_VERSION = "6.8.7"
 DATA_DIR = Path(os.getenv("DATA_DIR", "/data"))
 UPLOAD_DIR = Path(os.getenv("UPLOAD_DIR", "/uploads"))
 EXPORT_DIR = Path(os.getenv("EXPORT_DIR", "/exports"))
@@ -1083,20 +1083,128 @@ def normalize_unit_label(value, name=""):
     return "unidade"
 
 
-def infer_unit_quantity_from_text(name, quantity):
+def extract_package_units_from_text(text):
+    norm = text_norm(text)
+
+    # Unidades reais de estoque. Não inclui mg/ml/g/mcg/UI porque isso é concentração/volume.
+    unit_patterns = [
+        ("ampola", r"(\d+(?:[,.]\d+)?)\s*(?:ampola|ampolas)\b"),
+        ("caneta", r"(\d+(?:[,.]\d+)?)\s*(?:caneta|canetas)\b"),
+        ("comprimido", r"(\d+(?:[,.]\d+)?)\s*(?:comprimido|comprimidos|comp)\b"),
+        ("cápsula", r"(\d+(?:[,.]\d+)?)\s*(?:capsula|capsulas|cápsula|cápsulas)\b"),
+        ("frasco", r"(\d+(?:[,.]\d+)?)\s*(?:frasco|frascos)\b"),
+        ("cartela", r"(\d+(?:[,.]\d+)?)\s*(?:cartela|cartelas)\b"),
+        ("sachê", r"(\d+(?:[,.]\d+)?)\s*(?:sache|saches|sachê|sachês)\b"),
+        ("dose", r"(\d+(?:[,.]\d+)?)\s*(?:dose|doses)\b"),
+    ]
+
+    for unit, pattern in unit_patterns:
+        m = re.search(pattern, norm)
+        if m:
+            return safe_float(m.group(1), 0), unit
+
+    return 0, ""
+
+
+def extract_order_units_from_text(text):
+    norm = text_norm(text)
+
+    # Quantidade comprada do item no pedido/carrinho. Ex.: "2un", "2 un", "Qtd 2".
+    patterns = [
+        r"\b(?:qtd|qtde|quantidade)\s*[:x-]?\s*(\d+(?:[,.]\d+)?)\b",
+        r"\b(\d+(?:[,.]\d+)?)\s*(?:un|und|unid|unidade|unidades)\b",
+        r"\bx\s*(\d+(?:[,.]\d+)?)\b",
+    ]
+    for pattern in patterns:
+        matches = re.findall(pattern, norm)
+        if matches:
+            # Pega o último porque normalmente o nome do produto vem antes e "2un" vem depois.
+            return safe_float(matches[-1], 0)
+
+    return 0
+
+
+def normalize_stock_unit_from_product(name, unit_label=""):
+    text = text_norm(f"{unit_label} {name}")
+
+    # Prioridade para unidade real de uso.
+    if re.search(r"\b(?:ampola|ampolas)\b", text):
+        return "ampola"
+    if re.search(r"\b(?:caneta|canetas)\b", text):
+        return "caneta"
+    if re.search(r"\b(?:comprimido|comprimidos|comp)\b", text):
+        return "comprimido"
+    if re.search(r"\b(?:capsula|capsulas|cápsula|cápsulas)\b", text):
+        return "cápsula"
+    if re.search(r"\b(?:frasco|frascos)\b", text):
+        return "frasco"
+    if re.search(r"\b(?:cartela|cartelas)\b", text):
+        return "cartela"
+    if re.search(r"\b(?:sache|saches|sachê|sachês)\b", text):
+        return "sachê"
+    if re.search(r"\b(?:dose|doses)\b", text):
+        return "dose"
+
+    # Nunca tratar concentração/volume como unidade de estoque quando houver medicamento.
+    if re.search(r"\b(?:ml|mg|mcg|g|ui|iu)\b", text):
+        return "unidade"
+
+    return normalize_unit_label(unit_label, name)
+
+
+def infer_purchase_quantity_unit_price(name, quantity, unit_label="", total_price=0):
     q = safe_float(quantity, 0)
-    text = text_norm(name)
+    if q <= 0:
+        q = 1
 
-    # NF/pedido às vezes traz "1 caixa", mas o estoque útil é por unidade de uso.
-    if "deposteron" in text and ("caixa" in text or q <= 2):
-        return max(q * 3, 3), "ampola"
+    total = safe_float(total_price, 0)
+    text = safe_db_text(name or "")
+    norm = text_norm(text)
+    unit_hint = text_norm(unit_label)
 
-    if "mounjaro" in text and ("caixa" in text or "caneta" in text):
-        # Cada caixa geralmente representa 1 caneta/caneta dose semanal, manter unidade caneta.
-        return max(q, 1), "caneta"
+    package_units, package_unit_label = extract_package_units_from_text(text)
+    order_units = extract_order_units_from_text(text)
 
-    unit = normalize_unit_label("", name)
-    return max(q, 1), unit
+    # Se a IA informou "quantity" e o texto tem embalagem com N unidades:
+    # - quantity pode ser quantidade comprada (2 caixas)
+    # - ou pode ser o total já calculado (6 ampolas)
+    # Regra defensiva:
+    #   package_units=3, order_units=2 => 6
+    #   package_units=30, q=2 => 60
+    #   package_units=30, q=30 => 30
+    if package_units:
+        if order_units:
+            stock_qty = package_units * order_units
+        elif q and abs(q - package_units) > 0.0001:
+            stock_qty = package_units * q
+        else:
+            stock_qty = package_units
+
+        stock_unit = package_unit_label
+    else:
+        stock_qty = q
+        stock_unit = normalize_stock_unit_from_product(text, unit_hint)
+
+    # Casos comuns em que o produto vem como caixa, mas a unidade útil é outra.
+    if ("deposteron" in norm or "cipionato de testosterona" in norm) and stock_unit in {"unidade", "caixa", "ml"}:
+        stock_unit = "ampola"
+        if stock_qty <= 2:
+            stock_qty = stock_qty * 3
+
+    if ("mounjaro" in norm or "ozempic" in norm) and stock_unit in {"unidade", "caixa"}:
+        stock_unit = "caneta"
+
+    # Proteção final: ml/mg nunca devem virar unidade de estoque de medicamento.
+    if stock_unit in {"ml", "mg", "g", "mcg"}:
+        stock_unit = "unidade"
+
+    unit_price = total / stock_qty if total and stock_qty else 0
+    return max(stock_qty, 1), stock_unit or "unidade", unit_price
+
+
+def infer_unit_quantity_from_text(name, quantity):
+    quantity, unit, _unit_price = infer_purchase_quantity_unit_price(name, quantity, "", 0)
+    return quantity, unit
 
 
 def fallback_purchase_parse(text):
@@ -1122,23 +1230,30 @@ def fallback_purchase_parse(text):
         norm = text_norm(ln)
         if any(t in norm for t in medicine_terms):
             qty = 1
-            qmatch = re.search(r"(?:qtd|qtde|quantidade)?\s*[:x]?\s*(\d+(?:[,.]\d+)?)", norm)
-            if qmatch:
-                qty = safe_float(qmatch.group(1), 1)
+            order_qty = extract_order_units_from_text(ln)
+            if order_qty:
+                qty = order_qty
+            else:
+                qmatch = re.search(r"(?:qtd|qtde|quantidade)\s*[:x]?\s*(\d+(?:[,.]\d+)?)", norm)
+                if qmatch:
+                    qty = safe_float(qmatch.group(1), 1)
             total = 0
             prices = re.findall(r"(?:r\$)?\s*(\d+[,.]\d{2})", ln.lower())
             if prices:
                 total = safe_float(prices[-1], 0)
-            quantity, unit = infer_unit_quantity_from_text(ln, qty)
+            quantity, unit, unit_price = infer_purchase_quantity_unit_price(ln, qty, "", total)
             clean_name = re.sub(r"\s+", " ", ln)
             clean_name = re.sub(r"(?i)r\$\s*\d+[,.]\d{2}", "", clean_name).strip(" -|")
+            # remove ruídos comuns do pedido, mas preserva dose/concentração
+            clean_name = re.sub(r"(?i)\b\d+\s*un\b", "", clean_name).strip(" -|")
             items.append({
                 "name": clean_name[:120],
                 "quantity": quantity,
                 "unit_label": unit,
                 "total_price": total,
+                "unit_price": unit_price,
                 "requires_prescription": any(x in norm for x in ["deposteron", "mounjaro", "ozempic", "testosterona"]),
-                "confidence": 0.55,
+                "confidence": 0.75 if unit == "ampola" and "deposteron" in norm else 0.55,
             })
 
     # dedup simples
@@ -1188,8 +1303,13 @@ Responda SOMENTE JSON válido, sem markdown, neste formato:
 Regras:
 - Inclua apenas medicamentos, vitaminas, suplementos ou itens de saúde.
 - Ignore frete, desconto, taxa, cashback, endereço, CPF/CNPJ e forma de pagamento.
-- Se aparecer Deposteron em caixa, considere 1 caixa = 3 ampolas e unit_label="ampola".
-- Se aparecer Mounjaro/Ozempic em caixa/caneta, use unit_label="caneta".
+- Para qualquer produto, diferencie embalagem, quantidade comprada e concentração.
+- Se aparecer "30 comprimidos 2un", extraia quantity=60 e unit_label="comprimido".
+- Se aparecer "3 ampolas 2un", extraia quantity=6 e unit_label="ampola".
+- Se aparecer "1 caneta 4un", extraia quantity=4 e unit_label="caneta".
+- "ml", "mg", "mcg", "g", "UI" são concentração/volume/dosagem, NÃO unidade de estoque.
+- Nunca use unit_label="ml" ou "mg" quando existir unidade como ampola, caneta, comprimido, cápsula, frasco, cartela ou dose.
+- Para Mounjaro/Ozempic em caixa/caneta, use unit_label="caneta".
 - Se não souber o preço do item, use 0.
 - Se não souber a data, use "{today_date()}".
 - requires_prescription=true para anabolizantes, testosterona, Deposteron, Mounjaro/Ozempic e medicamentos controlados.
@@ -1217,16 +1337,15 @@ Texto OCR:
             quantity = safe_float(item.get("quantity"), 1)
             if quantity <= 0:
                 quantity = 1
-            unit_label = normalize_unit_label(item.get("unit_label") or "", name)
-            # Ajusta casos comuns em que a IA manteve "caixa".
-            quantity, inferred_unit = infer_unit_quantity_from_text(name, quantity)
-            if inferred_unit != "unidade":
-                unit_label = inferred_unit
+            raw_total_price = safe_float(item.get("total_price"), 0)
+            raw_unit_label = safe_db_text(item.get("unit_label") or "")
+            quantity, unit_label, unit_price = infer_purchase_quantity_unit_price(name, quantity, raw_unit_label, raw_total_price)
             clean_items.append({
                 "name": name,
                 "quantity": quantity,
                 "unit_label": unit_label,
-                "total_price": safe_float(item.get("total_price"), 0),
+                "total_price": raw_total_price,
+                "unit_price": unit_price,
                 "requires_prescription": bool(item.get("requires_prescription")),
                 "confidence": safe_float(item.get("confidence"), 0.7),
             })
@@ -1274,9 +1393,13 @@ def upsert_inventory_from_purchase(conn, profile_id, item, purchase_date, vendor
     if quantity <= 0:
         quantity = 1
 
-    unit_label = normalize_unit_label(item.get("unit_label") or "", name)
     total_price = safe_float(item.get("total_price"), 0)
-    unit_price = total_price / quantity if total_price and quantity else 0
+    quantity, unit_label, unit_price = infer_purchase_quantity_unit_price(
+        name,
+        quantity,
+        item.get("unit_label") or "",
+        total_price
+    )
     requires_prescription = int(bool(item.get("requires_prescription")))
 
     existing = find_matching_inventory_item(conn, profile_id, name)
